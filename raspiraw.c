@@ -57,6 +57,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/ioctl.h>
 
 #include "raw_header.h"
+#include "raspiraw_types.h"
 
 #define DEFAULT_I2C_DEVICE 10
 #define ALT_I2C_DEVICE	   0
@@ -101,15 +102,7 @@ struct mode_def
 	int binning; /* Binning or skipping factor */
 };
 
-struct raspiraw_crop
-{
-	int hinc;
-	int vinc;
-	int width;
-	int height;
-	int left;
-	int top;
-};
+
 
 struct sensor_def
 {
@@ -258,54 +251,11 @@ static COMMAND_LIST cmdline_commands[] = {
 
 static int cmdline_commands_size = sizeof(cmdline_commands) / sizeof(cmdline_commands[0]);
 
-typedef struct pts_node
-{
-	int idx;
-	int64_t pts;
-	struct pts_node *nxt;
-} * PTS_NODE_T;
+
 
 #define DEFAULT_PREVIEW_LAYER 3
 
-typedef struct raspiraw_params
-{
-	struct raspiraw_crop crop;
-	int mode;
-	int hflip;
-	int vflip;
-	int exposure;
-	int gain;
-	char *output;
-	int capture;
-	int write_header;
-	int timeout;
-	int saverate;
-	int bit_depth;
-	int camera_num;
-	int exposure_us;
-	int i2c_bus;
-	double awb_gains_r;
-	double awb_gains_b;
-	char *regs;
-	double fps;
-	char *write_header0;
-	char *write_headerg;
-	char *write_timestamps;
-	int write_empty;
-	PTS_NODE_T ptsa;
-	PTS_NODE_T ptso;
-	int decodemetadata;
-	int awb;
-	int no_preview;
-	int processing;
-	int fullscreen; // 0 is use previewRect, non-zero to use full screen
-	int opacity;	// Opacity of window - 0 = transparent, 255 = opaque
-	MMAL_RECT_T
-	preview_window; // Destination rectangle for the preview window.
-	int capture_yuv;
-	char *output_yuv;
-	int processing_yuv;
-} RASPIRAW_PARAMS_T;
+
 
 typedef struct
 {
@@ -1452,59 +1402,10 @@ static void vr_ip_cb(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 	buffers_to_isp_op(dev);
 }
 
-int main(int argc, char **argv)
-{
-	RASPIRAW_PARAMS_T cfg = { 0 };
-	RASPIRAW_CALLBACK_T dev = { .cfg = &cfg, .rawcam_pool = NULL, .rawcam_output = NULL };
-	RASPIRAW_ISP_CALLBACK_T yuv_cb = {
-		.cfg = &cfg,
-	};
-	uint32_t encoding;
-	const struct sensor_def *sensor;
-	struct mode_def *sensor_mode = NULL;
-	VCOS_THREAD_T awb_thread;
-	VCOS_THREAD_T processing_thread;
-	VCOS_THREAD_T processing_yuv_thread;
-	char i2c_device_name[I2C_DEVICE_NAME_LEN];
+static int i2c_open(int i2c_bus){
+	char i2c_device_name[16];
 	int i2c_fd;
-
-	// Initialise any non-zero config values.
-	cfg.exposure = -1;
-	cfg.gain = -1;
-	cfg.timeout = 5000;
-	cfg.saverate = 20;
-	cfg.bit_depth = -1;
-	cfg.camera_num = -1;
-	cfg.exposure_us = -1;
-	cfg.i2c_bus = -1;
-	cfg.crop.hinc = -1;
-	cfg.crop.vinc = -1;
-	cfg.fps = -1;
-	cfg.crop.width = -1;
-	cfg.crop.height = -1;
-	cfg.crop.left = -1;
-	cfg.crop.top = -1;
-	cfg.opacity = 255;
-	cfg.fullscreen = 1;
-
-	bcm_host_init();
-	vcos_log_register("RaspiRaw", VCOS_LOG_CATEGORY);
-
-	if (argc == 1)
-	{
-		fprintf(stdout, "\n%s Camera App %s\n\n", basename(argv[0]), VERSION_STRING);
-
-		raspicli_display_help(cmdline_commands, cmdline_commands_size);
-		exit(-1);
-	}
-
-	// Parse the command line and put options in to our status structure
-	if (parse_cmdline(argc, argv, &cfg))
-	{
-		exit(-1);
-	}
-
-	if (cfg.i2c_bus == -1)
+	if (i2c_bus == -1)
 	{
 		snprintf(i2c_device_name, sizeof(i2c_device_name), "/dev/i2c-%d", DEFAULT_I2C_DEVICE);
 		i2c_fd = open(i2c_device_name, O_RDWR);
@@ -1523,35 +1424,20 @@ int main(int argc, char **argv)
 	if (!i2c_fd)
 	{
 		printf("Failed to open I2C device %s\n", i2c_device_name);
-		return -1;
 	}
-
-	printf("Using I2C device %s\n", i2c_device_name);
-
-	sensor = probe_sensor(i2c_fd);
-	if (!sensor)
-	{
-		vcos_log_error("No sensor found. Aborting");
-		return -1;
+	else{
+		printf("Using I2C device %s\n", i2c_device_name);
 	}
+	return i2c_fd;
+}
 
-	if (cfg.mode >= 0 && cfg.mode < sensor->num_modes)
-	{
-		sensor_mode = &sensor->modes[cfg.mode];
-	}
-
-	if (!sensor_mode)
-	{
-		vcos_log_error("Invalid mode %d - aborting", cfg.mode);
-		return -2;
-	}
-
-	if (cfg.regs)
+static void modify_sensor_mode(char * regs, struct mode_def *sensor_mode){
+	if (regs)
 	{
 		int r, b;
 		char *p, *q;
 
-		p = strtok(cfg.regs, ";");
+		p = strtok(regs, ";");
 		while (p)
 		{
 			vcos_assert(strlen(p) > 6);
@@ -1576,13 +1462,17 @@ int main(int argc, char **argv)
 			p = strtok(NULL, ";");
 		}
 	}
+}
 
-	if (cfg.crop.hinc >= 0 || cfg.crop.vinc >= 0 || cfg.crop.width > 0 || cfg.crop.width > 0 || cfg.crop.top >= 0 ||
-	    cfg.crop.left >= 0)
+
+static int setup_crop(struct raspiraw_crop * crop, const struct sensor_def * sensor, struct mode_def *sensor_mode){
+	
+	if (crop->hinc >= 0 || crop->vinc >= 0 || crop->width > 0 || crop->width > 0 || crop->top >= 0 ||
+	    crop->left >= 0)
 	{
 		if (sensor->set_crop)
 		{
-			if (sensor->set_crop(sensor, sensor_mode, &cfg.crop))
+			if (sensor->set_crop(sensor, sensor_mode, crop))
 			{
 				vcos_log_error("Failed setting manual crops. Aborting");
 				return -1;
@@ -1595,32 +1485,135 @@ int main(int argc, char **argv)
 			return -1;
 		}
 	}
+}
 
-	if (cfg.fps > 0)
+static void setup_fps(int fps, struct mode_def *sensor_mode, const struct sensor_def *sensor){
+	if (fps > 0)
 	{
-		int n = 1000000000 / (sensor_mode->line_time_ns * cfg.fps);
+		int n = 1000000000 / (sensor_mode->line_time_ns * fps);
 		modReg(sensor_mode, sensor->vts_reg + 0, 0, 7, n >> 8, EQUAL);
 		modReg(sensor_mode, sensor->vts_reg + 1, 0, 7, n & 0xFF, EQUAL);
 	}
+}
 
-	if (cfg.bit_depth == -1)
+static int setup_bit_depth(RASPIRAW_PARAMS_T * cfg, struct mode_def *sensor_mode ){
+	if (cfg->bit_depth == -1)
 	{
-		cfg.bit_depth = sensor_mode->native_bit_depth;
+		cfg->bit_depth = sensor_mode->native_bit_depth;
 	}
 
-	if (cfg.write_headerg && (cfg.bit_depth != sensor_mode->native_bit_depth))
+	if (cfg->write_headerg && (cfg->bit_depth != sensor_mode->native_bit_depth))
 	{
 		// needs change after fix for
 		// https://github.com/6by9/raspiraw/issues/2
 		vcos_log_error("--headerG supported for native bit depth only");
+		return -1;
+	}
+	return 0;
+}
+
+static void setup_exposure(RASPIRAW_PARAMS_T * cfg, struct mode_def *sensor_mode){
+	if (cfg->exposure_us != -1)
+	{
+		cfg->exposure = ((int64_t)cfg->exposure_us * 1000) / sensor_mode->line_time_ns;
+		vcos_log_error("Setting exposure to %d from time %dus", cfg->exposure, cfg->exposure_us);
+	}
+}
+
+void init_cfg(RASPIRAW_PARAMS_T * cfg)
+{
+	cfg->exposure = -1;
+	cfg->gain = -1;
+	cfg->timeout = 5000;
+	cfg->saverate = 20;
+	cfg->bit_depth = -1;
+	cfg->camera_num = -1;
+	cfg->exposure_us = -1;
+	cfg->i2c_bus = -1;
+	cfg->crop.hinc = -1;
+	cfg->crop.vinc = -1;
+	cfg->fps = -1;
+	cfg->crop.width = -1;
+	cfg->crop.height = -1;
+	cfg->crop.left = -1;
+	cfg->crop.top = -1;
+	cfg->opacity = 255;
+	cfg->fullscreen = 1;
+}
+
+int main(int argc, char **argv)
+{
+	RASPIRAW_PARAMS_T cfg = { 0 };
+	RASPIRAW_CALLBACK_T dev = { .cfg = &cfg, .rawcam_pool = NULL, .rawcam_output = NULL };
+	RASPIRAW_ISP_CALLBACK_T yuv_cb = {
+		.cfg = &cfg,
+	};
+	uint32_t encoding;
+	const struct sensor_def *sensor;
+	struct mode_def *sensor_mode = NULL;
+	VCOS_THREAD_T awb_thread;
+	VCOS_THREAD_T processing_thread;
+	VCOS_THREAD_T processing_yuv_thread;
+	int i2c_fd;
+
+	// Initialise any non-zero config values.
+	init_cfg(&cfg);
+
+	bcm_host_init();
+	vcos_log_register("RaspiRaw", VCOS_LOG_CATEGORY);
+
+	if (argc == 1)
+	{
+		fprintf(stdout, "\n%s Camera App %s\n\n", basename(argv[0]), VERSION_STRING);
+
+		raspicli_display_help(cmdline_commands, cmdline_commands_size);
 		exit(-1);
 	}
 
-	if (cfg.exposure_us != -1)
+	// Parse the command line and put options in to our status structure
+	if (parse_cmdline(argc, argv, &cfg))
 	{
-		cfg.exposure = ((int64_t)cfg.exposure_us * 1000) / sensor_mode->line_time_ns;
-		vcos_log_error("Setting exposure to %d from time %dus", cfg.exposure, cfg.exposure_us);
+		exit(-1);
 	}
+	
+	i2c_fd = i2c_open(cfg.i2c_bus);
+
+	if (!i2c_fd)
+	{
+		return -1;
+	}
+
+	sensor = probe_sensor(i2c_fd);
+	if (!sensor)
+	{
+		vcos_log_error("No sensor found. Aborting");
+		return -1;
+	}
+
+	if (cfg.mode >= 0 && cfg.mode < sensor->num_modes)
+	{
+		sensor_mode = &sensor->modes[cfg.mode];
+	}
+
+	if (!sensor_mode)
+	{
+		vcos_log_error("Invalid mode %d - aborting", cfg.mode);
+		return -2;
+	}
+
+	modify_sensor_mode(cfg.regs, sensor_mode);
+
+	if(setup_crop(&cfg.crop, sensor, sensor_mode)){
+		return -1;
+	}
+	
+	setup_fps(cfg.fps,sensor_mode, sensor);
+
+
+	if(setup_bit_depth(&cfg, sensor_mode)){
+		return -1;
+	}
+	setup_exposure(&cfg, sensor_mode);
 
 	update_regs(sensor, sensor_mode, cfg.hflip, cfg.vflip, cfg.exposure, cfg.gain);
 	if (sensor_mode->encoding == 0)
