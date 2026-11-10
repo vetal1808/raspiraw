@@ -198,16 +198,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define adv7180_csi_write(STT, reg, dat) {reg, dat}
 #define adv7180_vpp_write(STT, reg, dat) {reg, dat}
 
-#define SET_BASE  {0xFFFF, ADV7180_DEFAULT_BASE_I2C_ADDR}
-#define SET_CSI   {0xFFFF, ADV7180_DEFAULT_CSI_I2C_ADDR}
-#define SET_VPP   {0xFFFF, ADV7180_DEFAULT_VPP_I2C_ADDR}
+#define SET_BASE  {SENSOR_REG_I2C_ADDR, ADV7180_DEFAULT_BASE_I2C_ADDR}
+#define SET_CSI   {SENSOR_REG_I2C_ADDR, ADV7180_DEFAULT_CSI_I2C_ADDR}
+#define SET_VPP   {SENSOR_REG_I2C_ADDR, ADV7180_DEFAULT_VPP_I2C_ADDR}
 
 // clang-format on
 
 struct sensor_regs adv7282_pal[] = {
 	// init_device
 	adv7180_write(state, ADV7180_REG_PWR_MAN, ADV7180_PWR_MAN_RES),
-	{ 0xFFFE, 100 },
+	{ SENSOR_REG_DELAY, 100 },
 
 	// adv7182_init
 	adv7180_write(state, ADV7180_REG_CSI_SLAVE_ADDR, ADV7180_DEFAULT_CSI_I2C_ADDR << 1),
