@@ -329,6 +329,21 @@ before generation of output. "d"/"dd" option is used by "_s"/"_S" mode tools.
 	format: raw2ogg2anim vname first last fps [d[d]]
 	$ 
 
+## Testing on the Pi
+
+[tools/hwtest.py](tools/hwtest.py) is a smoke test to run after building, with the camera connected and `camera_i2c` executed. It needs only Python 3.
+
+	$ tools/hwtest.py                  # sensor mode 0, 3s capture
+	$ tools/hwtest.py -md 7 --fps 90   # another mode, and check the frame rate
+	$ tools/hwtest.py --preview        # also send the stream to the display
+	$ tools/hwtest.py -- -g 64         # options after -- are passed to raspiraw
+
+It checks that bad command lines are rejected, captures frames to `/dev/shm/raspiraw_test`, then checks the frame count and numbering, the timestamps (frame rate, skipped frames), the BRCM header, and the size and pixel statistics of a few decoded frames. A second short capture checks `-hd` and `-sr`. The exit status is 0 if nothing failed.
+
+The statistics only catch gross failures (no data, constant or saturated image, wrong frame size). To judge the picture itself, look at the `preview.ppm` the test writes (`preview.jpg` too if python3-pil is installed): a small white-balanced colour image made from the middle frame.
+
+`tools/hwtest.py --check DIR` re-analyses an earlier capture, and `tools/hwtest.py --selftest` tests the script itself on synthetic frames, which works on any machine.
+
 ## Where is the limit?
 
 Above sample did capture 640x128 frames (stretched) at 665fps. It is possible to

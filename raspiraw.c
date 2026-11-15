@@ -1099,16 +1099,18 @@ uint32_t get_pixel(int x, int y, uint32_t encoding, int stride, uint8_t *data)
 	case MMAL_ENCODING_BAYER_SGBRG10P:
 	case MMAL_ENCODING_BAYER_SGRBG10P:
 	case MMAL_ENCODING_BAYER_SRGGB10P:
+		// 4 pixels in 5 bytes: the 8 MSBs of each, then a byte with the 4 pairs of LSBs
 		val = data[x + (x / 4) + (y * stride)] << 2;
-		val |= (data[x + (x / 4) + 4 + (y * stride)] & raw10_masks[x & 3]) >> raw10_shifts[x & 3];
+		val |= (data[(x / 4) * 5 + 4 + (y * stride)] & raw10_masks[x & 3]) >> raw10_shifts[x & 3];
 		break;
 
 	case MMAL_ENCODING_BAYER_SBGGR12P:
 	case MMAL_ENCODING_BAYER_SGBRG12P:
 	case MMAL_ENCODING_BAYER_SGRBG12P:
 	case MMAL_ENCODING_BAYER_SRGGB12P:
+		// 2 pixels in 3 bytes: the 8 MSBs of each, then a byte with the 2 nibbles of LSBs
 		val = data[x + (x / 2) + (y * stride)] << 4;
-		val |= (data[x + (x / 2) + 2 + (y * stride)] & raw12_masks[x & 1]) >> raw12_shifts[x & 1];
+		val |= (data[(x / 2) * 3 + 2 + (y * stride)] & raw12_masks[x & 1]) >> raw12_shifts[x & 1];
 		break;
 
 	case MMAL_ENCODING_BAYER_SBGGR16:
