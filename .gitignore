@@ -4,3 +4,4 @@ raspiraw
 *.jpg
 *.o
 *.d
+build-test/

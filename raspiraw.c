@@ -1009,7 +1009,8 @@ static void rawcam_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 	RASPIRAW_PARAMS_T *cfg = dev->cfg;
 
 	// Save every Nth frame. SD card access is too slow to do much more.
-	if (cfg->capture && !is_metadata_buffer(buffer) && ((count++) % cfg->saverate) == 0)
+	// Empty buffers are the unused ones handed back when the port is disabled.
+	if (cfg->capture && buffer->length && !is_metadata_buffer(buffer) && ((count++) % cfg->saverate) == 0)
 	{
 		if (write_frame_file(cfg->output, count, buffer, cfg->write_header, cfg->write_empty))
 			record_timestamp(cfg, count, buffer->pts);
@@ -1041,7 +1042,7 @@ static void yuv_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 	RASPIRAW_PARAMS_T *cfg = yuv_cb->cfg;
 
 	// Save every Nth frame. SD card access is too slow to do much more.
-	if (cfg->capture_yuv && !is_metadata_buffer(buffer) && ((count++) % cfg->saverate) == 0)
+	if (cfg->capture_yuv && buffer->length && !is_metadata_buffer(buffer) && ((count++) % cfg->saverate) == 0)
 		write_frame_file(cfg->output_yuv, count, buffer, 0, cfg->write_empty);
 
 	/* Pass the buffers off to any other MMAL sinks. */
@@ -1137,10 +1138,12 @@ enum channels
 
 uint64_t get_channel(enum channels chan, uint32_t encoding, uint64_t *sums)
 {
-	const int bggr[4] = { BLUE, GREEN1, GREEN2, RED };
-	const int rggb[4] = { RED, GREEN1, GREEN2, BLUE };
-	const int gbrg[4] = { GREEN1, BLUE, RED, GREEN2 };
-	const int grbg[4] = { GREEN1, RED, BLUE, GREEN2 };
+	// For each channel (RED, GREEN1, GREEN2, BLUE), its index in sums[], which holds the
+	// 2x2 cell as top left, top right, bottom left, bottom right
+	const int bggr[4] = { 3, 1, 2, 0 };
+	const int rggb[4] = { 0, 1, 2, 3 };
+	const int gbrg[4] = { 2, 0, 3, 1 };
+	const int grbg[4] = { 1, 0, 3, 2 };
 
 	switch (encoding)
 	{
@@ -2224,7 +2227,33 @@ static int setup_pipeline(RASPIRAW_PIPELINE_T *pipeline, RASPIRAW_CALLBACK_T *de
 	return 0;
 }
 
-/* Safe to call on a partially set up pipeline. */
+static void disable_port(MMAL_PORT_T *port)
+{
+	if (port->is_enabled && mmal_port_disable(port) != MMAL_SUCCESS)
+		vcos_log_error("Failed to disable %s", port->name);
+}
+
+/**
+ * Disables every port that is still enabled. A port hands the buffers it holds
+ * back to its callback when it is disabled, so this has to happen while the
+ * pools and the worker threads still exist. Destroying a component would
+ * disable its ports too, but by then the rawcam pool is gone.
+ * Safe to call on a partially set up pipeline.
+ */
+static void disable_ports(RASPIRAW_PIPELINE_T *pipeline)
+{
+	if (pipeline->rawcam)
+		disable_port(pipeline->rawcam->output[0]);
+	if (pipeline->isp)
+	{
+		disable_port(pipeline->isp->input[0]);
+		disable_port(pipeline->isp->output[0]);
+	}
+	if (pipeline->render)
+		disable_port(pipeline->render->input[0]);
+}
+
+/* Safe to call on a partially set up pipeline. The ports have to be disabled already. */
 static void destroy_pipeline(RASPIRAW_PIPELINE_T *pipeline)
 {
 	if (pipeline->rawcam_pool)
@@ -2353,8 +2382,9 @@ int main(int argc, char **argv)
 	if (!ret)
 		ret = run_capture(&pipeline, &cfg, sensor, sensor_mode, i2c_fd);
 
-	destroy_pipeline(&pipeline);
+	disable_ports(&pipeline);
 
+	// The workers use the rawcam pool, so they have to finish before it is destroyed
 	if (cfg.awb)
 	{
 		dev.awb_thread_quit = 1;
@@ -2372,6 +2402,8 @@ int main(int argc, char **argv)
 		yuv_cb.processing_yuv_thread_quit = 1;
 		vcos_thread_join(&pipeline.processing_yuv_thread, NULL);
 	}
+
+	destroy_pipeline(&pipeline);
 
 	if (cfg.write_timestamps)
 	{

@@ -344,6 +344,20 @@ The statistics only catch gross failures (no data, constant or saturated image, 
 
 `tools/hwtest.py --check DIR` re-analyses an earlier capture, and `tools/hwtest.py --selftest` tests the script itself on synthetic frames, which works on any machine.
 
+## Testing without a camera
+
+`make test` builds raspiraw against a mock of the firmware libraries and of the sensor ([tools/test/mock_mmal.c](tools/test/mock_mmal.c)) and runs [tools/test/run_tests.py](tools/test/run_tests.py) on it. It needs no camera and no legacy camera stack, only the VideoCore headers, so it also works on a Pi 5 or a PC:
+
+	$ make test                              # headers installed in /opt/vc/include
+	$ git clone --depth 1 https://github.com/raspberrypi/userland
+	$ make test USERLAND=userland            # headers from a userland checkout
+
+The mock stands in for MMAL, VCSM, vcos and the I2C bus: a fake ov5647, imx219 or imx477 answers on I2C and delivers synthetic frames once it is told to stream. The tests check the command line, the I2C bus selection, the files that get written, the AWB calculation and the behaviour when a step of the pipeline setup fails, and run `tools/hwtest.py` on the result. The binary is built with the address and undefined behaviour sanitizers, so memory errors on those paths fail the tests too.
+
+`make test-diff BASELINE=<git rev>` runs the same mock with about 150 command lines on the current code and on an older revision and lists every difference in exit status, messages, I2C register writes, MMAL calls and output files. It is meant for checking that a refactoring changed nothing it was not supposed to.
+
+The mock only does what its author believes the firmware does. Passing these tests does not replace a run of `tools/hwtest.py` on real hardware.
+
 ## Where is the limit?
 
 Above sample did capture 640x128 frames (stretched) at 665fps. It is possible to
